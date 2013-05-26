@@ -8,7 +8,6 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy.Char8 as LBC
-import qualified Data.ByteString.Lazy.Internal as LBSI
 import Data.Monoid((<>))
 import Control.Applicative(liftA2)
 import Data.Word(Word64)
@@ -56,7 +55,7 @@ header = LBC.pack "arbitrary"
 
 -- encrypt/decrypt defaultChunkSize bytes at a time using the external interface (must be a multiple of the aes blocksize 16)
 defaultChunkSize :: Int
-defaultChunkSize = LBSI.defaultChunkSize
+defaultChunkSize = 32*k where k = 1024
 
 stretchKey :: BS.ByteString -> BS.ByteString -> BS.ByteString
 stretchKey key salt = let PBKDF2.HashedPass pass = pbkdf2 (PBKDF2.Password $ BS.unpack key) (PBKDF2.Salt $ BS.unpack salt)
