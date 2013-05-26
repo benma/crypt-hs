@@ -45,19 +45,21 @@ keySize = 16 -- 128 bits
 header :: LBS.ByteString
 header = LBC.pack "arbitrary"
 
--- encrypt/decrypt chunkSize bytes at a time using the external interface (must be a multiple of the aes blocksize 16)
+-- encrypt/decrypt defaultChunkSize bytes at a time using the external interface (must be a multiple of the aes blocksize 16)
 defaultChunkSize :: Int
 defaultChunkSize = LBSI.defaultChunkSize
 
 stretchKey :: BS.ByteString -> BS.ByteString -> BS.ByteString
-stretchKey key salt = let HashedPass pass = pbkdf2' (HMAC.hmac sha512_hm, hashOutputSize) pbkdf2Rounds keySize (Password $ BS.unpack key) (Salt $ BS.unpack salt) in BS.pack pass
+stretchKey key salt = let HashedPass pass = pbkdf2' (HMAC.hmac sha512_hm, hashOutputSize) pbkdf2Rounds keySize (Password $ BS.unpack key) (Salt $ BS.unpack salt)
+                      in BS.pack pass
   where hashOutputSize = 64 -- sha512 returns a 64 bytes hash
         pbkdf2Rounds = 5000
         sha512_hm = HMAC.HashMethod SHA512.hash 1024 -- 1024: input block size of SHA-512
 
 chunks :: Int -> LBS.ByteString -> [BS.ByteString]
 chunks chunkSize str | LBS.null str = []
-                     | otherwise = let (before, after) = LBS.splitAt (fromIntegral chunkSize) str in (LBS.toStrict before) : chunks chunkSize after
+                     | otherwise = let (before, after) = LBS.splitAt (fromIntegral chunkSize) str
+                                   in (LBS.toStrict before) : chunks chunkSize after
 
 modifyLast :: (a -> a) -> [a] -> [a]
 modifyLast _ [] = []
