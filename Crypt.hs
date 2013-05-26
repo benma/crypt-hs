@@ -22,25 +22,28 @@ aesBlockSize = 16
 -- 64 bits is enough to serve many different keys.
 type Seed = Word64
 
+type IVSeed = Seed
+type SaltSeed = Seed
+
 -- getIV takes a number (unique for each encryption key) and returns a 16 bytes IV
 -- The 16 bytes IV returned is a concatanation of two identical 8 byte strings.
 -- It does not really matter whether the entropy is halved to 8 bytes, 8 bytes is still plenty to make collisions extremely unlikely.
-getIV :: Seed -> BS.ByteString
+getIV :: IVSeed -> BS.ByteString
 getIV n = LBS.toStrict $ p <> p
   where p = dumpsNumber n 
 
 -- getSalt takes a number (unique for each encryption key) and returns a 8 byte salt
-getSalt :: Seed -> BS.ByteString
+getSalt :: SaltSeed -> BS.ByteString
 getSalt = LBS.toStrict . dumpsNumber
 
-dumpsNumber :: Seed -> LBS.ByteString
+dumpsNumber :: Word64 -> LBS.ByteString
 dumpsNumber = BinP.runPut . dumpsNumber'
 
-dumpsNumber' :: Seed -> BinP.Put
-dumpsNumber' = BinP.putWord64be
+dumpsNumber' :: Word64 -> BinP.Put
+dumpsNumber' = BinP.putWord64le
 
-loadsNumber' :: BinG.Get Seed
-loadsNumber' = BinG.getWord64be
+loadsNumber' :: BinG.Get Word64
+loadsNumber' = BinG.getWord64le
 
 -- keySize needs to be 16, 24 or 32 bytes.
 keySize :: Integer
@@ -56,11 +59,13 @@ defaultChunkSize :: Int
 defaultChunkSize = LBSI.defaultChunkSize
 
 stretchKey :: BS.ByteString -> BS.ByteString -> BS.ByteString
-stretchKey key salt = let PBKDF2.HashedPass pass = PBKDF2.pbkdf2' (HMAC.hmac sha512_hm, hashOutputSize) pbkdf2Rounds keySize (PBKDF2.Password $ BS.unpack key) (PBKDF2.Salt $ BS.unpack salt)
+stretchKey key salt = let PBKDF2.HashedPass pass = pbkdf2 (PBKDF2.Password $ BS.unpack key) (PBKDF2.Salt $ BS.unpack salt)
                       in BS.pack pass
   where hashOutputSize = 64 -- sha512 returns a 64 bytes hash
-        pbkdf2Rounds = 5000
         sha512_hm = HMAC.HashMethod SHA512.hash 1024 -- 1024: input block size of SHA-512
+        hmacSpec = (HMAC.hmac sha512_hm, hashOutputSize)
+        pbkdf2Rounds = 5000
+        pbkdf2 = PBKDF2.pbkdf2' hmacSpec pbkdf2Rounds keySize
 
 chunks :: Int -> LBS.ByteString -> [BS.ByteString]
 chunks chunkSize str | LBS.null str = []
@@ -81,7 +86,7 @@ unpad :: BS.ByteString -> BS.ByteString
 unpad xs = BS.take (BS.length xs - fromIntegral fillNumber) xs
   where fillNumber = BS.last xs
                       
-encrypt :: BS.ByteString -> Seed -> Seed -> LBS.ByteString -> LBS.ByteString
+encrypt :: BS.ByteString -> IVSeed -> SaltSeed -> LBS.ByteString -> LBS.ByteString
 encrypt key ivSeed saltSeed msg = BinP.runPut $ do
   dumpsNumber' ivSeed
   dumpsNumber' saltSeed
@@ -96,14 +101,14 @@ decrypt key msg = let Right (rest, _, (ivSeed, saltSeed)) = BinG.runGetOrFail (l
                      then Nothing
                      else Just decrypted'
 
-encryptStream :: BS.ByteString -> Seed -> Seed -> [BS.ByteString] -> LBS.ByteString
+encryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> LBS.ByteString
 encryptStream key ivSeed saltSeed msgs = LBS.fromChunks $ encryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) $ modifyLast pad msgs
   where encryptStream' _ _ [] = []
         encryptStream' key' iv (m:ms) = let enc = AES.encryptCBC key' (AES.IV iv) m
                                         in enc : encryptStream' key' (lastBlock enc) ms
           where lastBlock enc = BS.drop (BS.length enc - aesBlockSize) enc
 
-decryptStream :: BS.ByteString -> Seed -> Seed -> [BS.ByteString] -> LBS.ByteString
+decryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> LBS.ByteString
 decryptStream key ivSeed saltSeed msgs = LBS.fromChunks $ modifyLast unpad $ decryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) msgs
   where decryptStream' _ _ [] = []
         decryptStream' key' iv (m:ms) = let dec = AES.decryptCBC key' (AES.IV iv) m
