@@ -9,10 +9,12 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy.Char8 as LBC
 import Data.Monoid((<>))
-import Control.Applicative(liftA2)
+import Control.Applicative(liftA2, (<$>))
 import Data.Word(Word64)
 import qualified System.Random.MWC as R
 import System.Environment(getArgs)
+import System.IO(hPutStr,hFlush,stdin,stderr,hPutChar,hSetEcho)
+import Control.Exception(bracket_)
 
 aesBlockSize :: Int
 aesBlockSize = 16
@@ -116,10 +118,20 @@ decryptStream key ivSeed saltSeed msgs = LBS.fromChunks $ modifyLast unpad $ dec
 
 main :: IO ()
 main = do
-  (mode:key:[]) <- getArgs
+  (mode:file:[]) <- getArgs
   case mode of
-    "encrypt" -> do (ivSeed, saltSeed) <- R.withSystemRandom . R.asGenIO $ \gen -> liftA2 (,) (R.uniform gen) (R.uniform gen) 
-                    LBS.interact $ encrypt (BC.pack key) ivSeed saltSeed
-    "decrypt" -> LBS.interact $ maybe (error "decryption failed") id . decrypt (BC.pack key)
+    "encrypt" -> do (ivSeed, saltSeed) <- getRandomPair
+                    key <- getKey
+                    interactFile file $ encrypt (BC.pack key) ivSeed saltSeed
+    "decrypt" -> do key <- getKey
+                    interactFile file $ maybe (error "decryption failed") id . decrypt (BC.pack key)
     _ -> error "error: encrypt|decrypt"
-  
+  where
+    getKey = do
+      hPutStr stderr "Key: "
+      hFlush stderr
+      pass <- bracket_ (hSetEcho stdin False) (hSetEcho stdin True) getLine
+      hPutChar stderr '\n'
+      return pass
+    interactFile file transformer = transformer <$> LBS.readFile file >>= LBS.putStr
+    getRandomPair = R.withSystemRandom . R.asGenIO $ \gen -> liftA2 (,) (R.uniform gen) (R.uniform gen)
