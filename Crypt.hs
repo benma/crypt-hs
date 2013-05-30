@@ -58,7 +58,7 @@ header = LBC.pack "arbitrary"
 
 -- encrypt/decrypt defaultChunkSize bytes at a time using the external interface (must be a multiple of the aes blocksize 16)
 defaultChunkSize :: Int
-defaultChunkSize = 32*k where k = 1024
+defaultChunkSize = 32 * k where k = 1024
 
 stretchKey :: BS.ByteString -> BS.ByteString -> BS.ByteString
 stretchKey key salt = let PBKDF2.HashedPass pass = pbkdf2 (PBKDF2.Password $ BS.unpack key) (PBKDF2.Salt $ BS.unpack salt)
@@ -93,7 +93,7 @@ encrypt key ivSeed saltSeed msg = BinP.runPut $ do
   dumpsNumber' ivSeed
   dumpsNumber' saltSeed
   let msgWithHeader = header <> msg
-  mapM_ BinP.putByteString $ encryptStream key ivSeed saltSeed $ chunks defaultChunkSize msgWithHeader
+  BinP.putLazyByteString $ LBS.fromChunks $ encryptStream key ivSeed saltSeed $ chunks defaultChunkSize msgWithHeader
 
 decrypt :: BS.ByteString -> LBS.ByteString -> Maybe LBS.ByteString
 decrypt key msg = let Right (rest, _, (ivSeed, saltSeed)) = BinG.runGetOrFail (liftA2 (,) loadsNumber' loadsNumber') msg
