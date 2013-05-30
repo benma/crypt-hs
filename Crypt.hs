@@ -10,6 +10,7 @@ import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy.Char8 as LBC
 import Data.Monoid((<>))
 import Control.Applicative(liftA2, (<$>))
+
 import Data.Word(Word64)
 import qualified System.Random.MWC as R
 import System.Environment(getArgs)
@@ -92,25 +93,25 @@ encrypt key ivSeed saltSeed msg = BinP.runPut $ do
   dumpsNumber' ivSeed
   dumpsNumber' saltSeed
   let msgWithHeader = header <> msg
-  BinP.putLazyByteString $ encryptStream key ivSeed saltSeed $ chunks defaultChunkSize msgWithHeader
+  mapM_ BinP.putByteString $ encryptStream key ivSeed saltSeed $ chunks defaultChunkSize msgWithHeader
 
 decrypt :: BS.ByteString -> LBS.ByteString -> Maybe LBS.ByteString
 decrypt key msg = let Right (rest, _, (ivSeed, saltSeed)) = BinG.runGetOrFail (liftA2 (,) loadsNumber' loadsNumber') msg
-                      decrypted = decryptStream key ivSeed saltSeed $ chunks defaultChunkSize rest
+                      decrypted = LBS.fromChunks $ decryptStream key ivSeed saltSeed $ chunks defaultChunkSize rest
                       (header', decrypted') = LBS.splitAt (LBS.length header) decrypted
                   in if header /= header'
                      then Nothing
                      else Just decrypted'
 
-encryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> LBS.ByteString
-encryptStream key ivSeed saltSeed msgs = LBS.fromChunks $ encryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) $ modifyLast pad msgs
+encryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> [BS.ByteString]
+encryptStream key ivSeed saltSeed msgs = encryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) $ modifyLast pad msgs
   where encryptStream' _ _ [] = []
         encryptStream' key' iv (m:ms) = let enc = AES.encryptCBC key' (AES.IV iv) m
                                         in enc : encryptStream' key' (lastBlock enc) ms
           where lastBlock enc = BS.drop (BS.length enc - aesBlockSize) enc
 
-decryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> LBS.ByteString
-decryptStream key ivSeed saltSeed msgs = LBS.fromChunks $ modifyLast unpad $ decryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) msgs
+decryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> [BS.ByteString]
+decryptStream key ivSeed saltSeed msgs = modifyLast unpad $ decryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) msgs
   where decryptStream' _ _ [] = []
         decryptStream' key' iv (m:ms) = let dec = AES.decryptCBC key' (AES.IV iv) m
                                         in dec : decryptStream' key' (lastBlock m) ms
