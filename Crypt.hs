@@ -7,15 +7,39 @@ import qualified Data.Digest.SHA512 as SHA512
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Char8 as BC
-import qualified Data.ByteString.Lazy.Char8 as LBC
 import Data.Monoid((<>))
 import Control.Applicative(liftA2, (<$>))
 
 import Data.Word(Word64)
 import qualified System.Random.MWC as R
 import System.Environment(getArgs)
-import System.IO(hPutStr,hFlush,stdin,stderr,hPutChar,hSetEcho)
+import System.IO --(hPutStr,hFlush,stdin,stderr,hPutChar,hSetEcho)
+import System.IO.Unsafe(unsafeInterleaveIO)
 import Control.Exception(bracket_)
+
+newtype Chunks = Chunks [BS.ByteString]
+
+chunksFromLBS :: Int -> LBS.ByteString -> Chunks
+chunksFromLBS chunkSize = Chunks . toChunks' 
+  where 
+    toChunks' :: LBS.ByteString -> [BS.ByteString]
+    toChunks' str | LBS.null str = []
+                  | otherwise = let (before, after) = LBS.splitAt (fromIntegral chunkSize) str
+                                in (LBS.toStrict before) : toChunks' after
+
+chunksFromHandle :: Int -> Handle -> IO Chunks
+chunksFromHandle chunkSize h = Chunks <$> hGetContentsN
+  where
+    hGetContentsN :: IO [BS.ByteString]
+    hGetContentsN = lazyRead
+      where
+        lazyRead = unsafeInterleaveIO loop
+        loop = do
+          c <- BS.hGet h chunkSize
+          if BS.null c
+            then return []
+            else do cs <- lazyRead
+                    return (c : cs)
 
 aesBlockSize :: Int
 aesBlockSize = 16
@@ -53,8 +77,8 @@ keySize = 16 -- 128 bits
 
 -- header will be prepended to the message before encryption.
 -- used to check it decryption is valid.
-header :: LBS.ByteString
-header = LBC.pack "arbitrary"
+header :: BS.ByteString
+header = BC.pack "arbitrary0123456"
 
 -- encrypt/decrypt defaultChunkSize bytes at a time using the external interface (must be a multiple of the aes blocksize 16)
 defaultChunkSize :: Int
@@ -68,11 +92,6 @@ stretchKey key salt = let PBKDF2.HashedPass pass = pbkdf2 (PBKDF2.Password $ BS.
         hmacSpec = (HMAC.hmac sha512_hm, hashOutputSize)
         pbkdf2Rounds = 5000
         pbkdf2 = PBKDF2.pbkdf2' hmacSpec pbkdf2Rounds keySize
-
-chunks :: Int -> LBS.ByteString -> [BS.ByteString]
-chunks chunkSize str | LBS.null str = []
-                     | otherwise = let (before, after) = LBS.splitAt (fromIntegral chunkSize) str
-                                   in (LBS.toStrict before) : chunks chunkSize after
 
 modifyLast :: (a -> a) -> [a] -> [a]
 modifyLast _ [] = []
@@ -88,20 +107,19 @@ unpad :: BS.ByteString -> BS.ByteString
 unpad xs = BS.take (BS.length xs - fromIntegral fillNumber) xs
   where fillNumber = BS.last xs
                       
-encrypt :: BS.ByteString -> IVSeed -> SaltSeed -> LBS.ByteString -> LBS.ByteString
-encrypt key ivSeed saltSeed msg = BinP.runPut $ do
+encrypt :: BS.ByteString -> IVSeed -> SaltSeed -> Chunks -> LBS.ByteString
+encrypt key ivSeed saltSeed (Chunks msg) = BinP.runPut $ do
   dumpsNumber' ivSeed
   dumpsNumber' saltSeed
-  let msgWithHeader = header <> msg
-  BinP.putLazyByteString $ LBS.fromChunks $ encryptStream key ivSeed saltSeed $ chunks defaultChunkSize msgWithHeader
+  BinP.putLazyByteString $ LBS.fromChunks $ encryptStream key ivSeed saltSeed $ header : msg
 
-decrypt :: BS.ByteString -> LBS.ByteString -> Maybe LBS.ByteString
-decrypt key msg = let Right (rest, _, (ivSeed, saltSeed)) = BinG.runGetOrFail (liftA2 (,) loadsNumber' loadsNumber') msg
-                      decrypted = LBS.fromChunks $ decryptStream key ivSeed saltSeed $ chunks defaultChunkSize rest
-                      (header', decrypted') = LBS.splitAt (LBS.length header) decrypted
-                  in if header /= header'
-                     then Nothing
-                     else Just decrypted'
+decrypt :: BS.ByteString -> Chunks -> Maybe LBS.ByteString
+decrypt key (Chunks msg) = let Right (rest, _, (ivSeed, saltSeed)) = BinG.runGetOrFail (liftA2 (,) loadsNumber' loadsNumber') $ LBS.fromChunks msg
+                               decrypted = LBS.fromChunks $ decryptStream key ivSeed saltSeed (LBS.toChunks rest)
+                               (header', decrypted') = LBS.splitAt (fromIntegral $ BS.length header) decrypted
+                           in if header /= LBS.toStrict header'
+                              then Nothing
+                              else Just decrypted'
 
 encryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> [BS.ByteString]
 encryptStream key ivSeed saltSeed msgs = encryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) $ modifyLast pad msgs
@@ -119,13 +137,13 @@ decryptStream key ivSeed saltSeed msgs = modifyLast unpad $ decryptStream' (AES.
 
 main :: IO ()
 main = do
-  (mode:file:[]) <- getArgs
+  (mode:file:rest) <- getArgs
   case mode of
     "encrypt" -> do (ivSeed, saltSeed) <- getRandomPair
                     key <- getKey
-                    interactFile file $ encrypt (BC.pack key) ivSeed saltSeed
+                    interactFileChunks file $ encrypt (BC.pack key) ivSeed saltSeed
     "decrypt" -> do key <- getKey
-                    interactFile file $ maybe (error "decryption failed") id . decrypt (BC.pack key)
+                    interactFileChunks file $ maybe (error "decryption failed") id . decrypt (BC.pack key)
     _ -> error "error: encrypt|decrypt"
   where
     getKey = do
@@ -134,5 +152,6 @@ main = do
       pass <- bracket_ (hSetEcho stdin False) (hSetEcho stdin True) getLine
       hPutChar stderr '\n'
       return pass
-    interactFile file transformer = transformer <$> LBS.readFile file >>= LBS.putStr
+    interactFileChunks file transformer = withBinaryFile file ReadMode $ \h -> transformer <$> chunksFromHandle defaultChunkSize h >>= LBS.putStr
+    -- interactFileChunksSlow file transformer = transformer . chunksFromLBS defaultChunkSize <$> LBS.readFile file >>= LBS.putStr 
     getRandomPair = R.withSystemRandom . R.asGenIO $ \gen -> liftA2 (,) (R.uniform gen) (R.uniform gen)
