@@ -17,6 +17,22 @@ import System.IO --(hPutStr,hFlush,stdin,stderr,hPutChar,hSetEcho)
 import System.IO.Unsafe(unsafeInterleaveIO)
 import Control.Exception(bracket_)
 
+aesBlockSize :: Int
+aesBlockSize = 16
+
+-- keySize needs to be 16, 24 or 32 bytes.
+keySize :: Integer
+keySize = 16 -- 128 bits
+
+-- header will be prepended to the message before encryption.
+-- used to check it decryption is valid.
+header :: BS.ByteString
+header = BC.pack "arbitrary0123456"
+
+-- encrypt/decrypt defaultChunkSize bytes at a time using the external interface (must be a multiple of the aes blocksize 16)
+defaultChunkSize :: Int
+defaultChunkSize = 32 * k where k = 1024
+
 newtype Chunks = Chunks [BS.ByteString]
 
 chunksFromLBS :: Int -> LBS.ByteString -> Chunks
@@ -41,13 +57,11 @@ chunksFromHandle chunkSize h = Chunks <$> hGetContentsN
             else do cs <- lazyRead
                     return (c : cs)
 
-aesBlockSize :: Int
-aesBlockSize = 16
+
 
 -- IV and salt need to be unique for each encryption key
 -- 64 bits is enough to serve many different keys.
 type Seed = Word64
-
 type IVSeed = Seed
 type SaltSeed = Seed
 
@@ -70,19 +84,6 @@ dumpsNumber' = BinP.putWord64le
 
 loadsNumber' :: BinG.Get Word64
 loadsNumber' = BinG.getWord64le
-
--- keySize needs to be 16, 24 or 32 bytes.
-keySize :: Integer
-keySize = 16 -- 128 bits
-
--- header will be prepended to the message before encryption.
--- used to check it decryption is valid.
-header :: BS.ByteString
-header = BC.pack "arbitrary0123456"
-
--- encrypt/decrypt defaultChunkSize bytes at a time using the external interface (must be a multiple of the aes blocksize 16)
-defaultChunkSize :: Int
-defaultChunkSize = 32 * k where k = 1024
 
 stretchKey :: BS.ByteString -> BS.ByteString -> BS.ByteString
 stretchKey key salt = let PBKDF2.HashedPass pass = pbkdf2 (PBKDF2.Password $ BS.unpack key) (PBKDF2.Salt $ BS.unpack salt)
@@ -137,7 +138,7 @@ decryptStream key ivSeed saltSeed msgs = modifyLast unpad $ decryptStream' (AES.
 
 main :: IO ()
 main = do
-  (mode:file:rest) <- getArgs
+  (mode:file:[]) <- getArgs
   case mode of
     "encrypt" -> do (ivSeed, saltSeed) <- getRandomPair
                     key <- getKey
