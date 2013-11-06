@@ -35,13 +35,13 @@ defaultChunkSize = 32 * k where k = 1024
 
 newtype Chunks = Chunks [BS.ByteString]
 
-chunksFromLBS :: Int -> LBS.ByteString -> Chunks
-chunksFromLBS chunkSize = Chunks . toChunks' 
-  where 
-    toChunks' :: LBS.ByteString -> [BS.ByteString]
-    toChunks' str | LBS.null str = []
-                  | otherwise = let (before, after) = LBS.splitAt (fromIntegral chunkSize) str
-                                in (LBS.toStrict before) : toChunks' after
+-- chunksFromLBS :: Int -> LBS.ByteString -> Chunks
+-- chunksFromLBS chunkSize = Chunks . toChunks' 
+--   where 
+--     toChunks' :: LBS.ByteString -> [BS.ByteString]
+--     toChunks' str | LBS.null str = []
+--                   | otherwise = let (before, after) = LBS.splitAt (fromIntegral chunkSize) str
+--                                 in (LBS.toStrict before) : toChunks' after
 
 chunksFromHandle :: Int -> Handle -> IO Chunks
 chunksFromHandle chunkSize h = Chunks <$> hGetContentsN
@@ -123,16 +123,16 @@ decrypt key (Chunks msg) = let Right (rest, _, (ivSeed, saltSeed)) = BinG.runGet
                               else Just decrypted'
 
 encryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> [BS.ByteString]
-encryptStream key ivSeed saltSeed msgs = encryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) $ modifyLast pad msgs
+encryptStream key ivSeed saltSeed msgs = encryptStream' (AES.initAES $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) $ modifyLast pad msgs
   where encryptStream' _ _ [] = []
-        encryptStream' key' iv (m:ms) = let enc = AES.encryptCBC key' (AES.IV iv) m
+        encryptStream' key' iv (m:ms) = let enc = AES.encryptCBC key' iv m
                                         in enc : encryptStream' key' (lastBlock enc) ms
           where lastBlock enc = BS.drop (BS.length enc - aesBlockSize) enc
 
 decryptStream :: BS.ByteString -> IVSeed -> SaltSeed -> [BS.ByteString] -> [BS.ByteString]
-decryptStream key ivSeed saltSeed msgs = modifyLast unpad $ decryptStream' (AES.initKey $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) msgs
+decryptStream key ivSeed saltSeed msgs = modifyLast unpad $ decryptStream' (AES.initAES $ stretchKey key $ getSalt saltSeed) (getIV ivSeed) msgs
   where decryptStream' _ _ [] = []
-        decryptStream' key' iv (m:ms) = let dec = AES.decryptCBC key' (AES.IV iv) m
+        decryptStream' key' iv (m:ms) = let dec = AES.decryptCBC key' iv m
                                         in dec : decryptStream' key' (lastBlock m) ms
           where lastBlock enc = BS.drop (BS.length enc - aesBlockSize) enc
 
